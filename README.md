@@ -38,6 +38,11 @@ It automatically extracts skills from your resume and highlights the skills ment
 
 ---
 
+| Resume Upload Page | Match Result Output |
+|--------------------|---------------------|
+| ![Frontend UI](screensh
+ots/frontend.png) | ![Backend JSON](screenshots/backend.png) |
+
 ## ⚙️ Setup and Run Guide
 
 ### Clone this repository
