@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🤖 AI Resume Analyser Pro
+# 🤖 AI Resume Analyser
 
 **Production-grade resume intelligence — semantic scoring, RAG-grounded LLM feedback, and ATS gap detection**
 
