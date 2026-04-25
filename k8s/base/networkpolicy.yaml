@@ -1,0 +1,208 @@
+##############################################################################
+# Default-deny ingress + explicit allow rules for the resume-analyser namespace
+##############################################################################
+
+# 1. Default deny all ingress traffic within the namespace
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector: {}     # applies to ALL pods in namespace
+  policyTypes:
+    - Ingress
+
+# 2. Allow ingress to the API from the AWS ALB Controller (ingress namespace)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-controller-to-api
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: resume-analyser-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Allow from kube-system (aws-load-balancer-controller) and any namespace
+        # labelled networking/ingress=true (e.g. nginx-ingress namespace)
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - namespaceSelector:
+            matchLabels:
+              networking/ingress: "true"
+      ports:
+        - protocol: TCP
+          port: 8000
+
+# 3. Allow ingress to the frontend from the ALB Controller
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-controller-to-frontend
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: resume-analyser-frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - namespaceSelector:
+            matchLabels:
+              networking/ingress: "true"
+      ports:
+        - protocol: TCP
+          port: 80
+
+# 4. Allow Prometheus scraping of API /metrics endpoint
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape-api
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: resume-analyser-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+
+# 5. Allow egress from API and worker pods to external services
+#    (RDS on 5432, ElastiCache on 6379, HTTPS on 443, OTEL on 4317)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-egress
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # AWS RDS (Postgres)
+    - ports:
+        - protocol: TCP
+          port: 5432
+    # AWS ElastiCache (Redis)
+    - ports:
+        - protocol: TCP
+          port: 6379
+    # HTTPS — OpenAI API, AWS S3, Bedrock, etc.
+    - ports:
+        - protocol: TCP
+          port: 443
+    # OpenTelemetry Collector (in-cluster)
+    - ports:
+        - protocol: TCP
+          port: 4317
+    # Kubernetes API server (for health checks, token refresh)
+    - ports:
+        - protocol: TCP
+          port: 6443
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-worker-egress
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: worker
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # AWS RDS (Postgres)
+    - ports:
+        - protocol: TCP
+          port: 5432
+    # AWS ElastiCache (Redis)
+    - ports:
+        - protocol: TCP
+          port: 6379
+    # HTTPS — OpenAI API, AWS S3, Bedrock, HuggingFace model downloads
+    - ports:
+        - protocol: TCP
+          port: 443
+    # OpenTelemetry Collector
+    - ports:
+        - protocol: TCP
+          port: 4317
+
+# 6. Allow frontend egress only to kube-dns (it's static, no backend calls needed from pod itself)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-egress
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: resume-analyser-frontend
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

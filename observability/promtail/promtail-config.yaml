@@ -1,0 +1,78 @@
+# Promtail — optional log shipper for Loki
+# Tails container logs from Docker (local dev) or from Kubernetes pod logs.
+# Runs as a DaemonSet in Kubernetes; as a sidecar or via docker-compose locally.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # ── Docker container logs (local dev) ──────────────────────
+  - job_name: docker-containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=ai-resume-analyser-pro"]
+    relabel_configs:
+      - source_labels: [__meta_docker_container_name]
+        regex: /(.*)
+        target_label: container
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: service
+      - source_labels: [__meta_docker_container_label_com_docker_compose_project]
+        target_label: project
+    pipeline_stages:
+      # Parse structured JSON logs emitted by the FastAPI service (structlog)
+      - json:
+          expressions:
+            level: level
+            logger: logger
+            event: event
+            request_id: request_id
+            method: method
+            path: path
+            status_code: status_code
+            duration_ms: duration_ms
+      - labels:
+          level:
+          service:
+          request_id:
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+
+  # ── Kubernetes pod logs ────────────────────────────────────
+  # Enable when running in Kubernetes instead of docker-compose.
+  # - job_name: kubernetes-pods
+  #   kubernetes_sd_configs:
+  #     - role: pod
+  #   relabel_configs:
+  #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+  #       action: drop
+  #       regex: "false"
+  #     - source_labels: [__meta_kubernetes_namespace]
+  #       target_label: namespace
+  #     - source_labels: [__meta_kubernetes_pod_name]
+  #       target_label: pod
+  #     - source_labels: [__meta_kubernetes_pod_label_app]
+  #       target_label: app
+  #     - replacement: /var/log/pods/*$1/*.log
+  #       separator: /
+  #       source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+  #       target_label: __path__
+  #   pipeline_stages:
+  #     - cri: {}
+  #     - json:
+  #         expressions:
+  #           level: level
+  #           event: event
+  #     - labels:
+  #         level:

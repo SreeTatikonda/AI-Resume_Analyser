@@ -1,0 +1,89 @@
+# =============================================================================
+# Development overrides for ai-resume-analyser Helm chart.
+# Apply with: helm upgrade --install ai-resume-analyser . -f values-dev.yaml
+# =============================================================================
+
+api:
+  replicaCount: 1
+  image:
+    tag: "dev"
+    pullPolicy: Always
+
+worker:
+  replicaCount: 1
+  image:
+    tag: "dev"
+    pullPolicy: Always
+
+frontend:
+  replicaCount: 1
+  image:
+    tag: "dev"
+    pullPolicy: Always
+
+autoscaling:
+  api:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 80
+  worker:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+
+env:
+  APP_ENV: "development"
+  LOG_LEVEL: "DEBUG"
+  CORS_ORIGINS: "https://dev.resume-analyser.example.com,http://localhost:5173"
+  S3_BUCKET: "ai-resume-analyser-dev"
+  PROMETHEUS_ENABLED: "true"
+  OTEL_ENABLED: "false"
+
+serviceAccount:
+  create: true
+  roleArn: "arn:aws:iam::REPLACE_ACCOUNT_ID:role/ResumeAnalyserApiRole-dev"
+
+# In dev, allow inline secrets (not recommended for prod)
+externalSecrets:
+  enabled: false
+
+ingress:
+  enabled: true
+  host: dev.resume-analyser.example.com
+  certificateArn: "arn:aws:acm:us-east-1:REPLACE_ACCOUNT_ID:certificate/REPLACE_DEV_CERT_ID"
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internal   # Internal ALB for dev
+    alb.ingress.kubernetes.io/tags: "Environment=development,Project=ai-resume-analyser"
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+
+podDisruptionBudget:
+  api:
+    enabled: false   # PDB not needed in dev
+
+# Lower resource requests for dev cluster cost savings
+resources:
+  api:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  worker:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  frontend:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi

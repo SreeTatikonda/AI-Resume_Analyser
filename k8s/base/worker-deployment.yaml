@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resume-analyser-worker
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/name: resume-analyser-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: resume-analyser-worker
+      app.kubernetes.io/component: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: resume-analyser-worker
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: ai-resume-analyser
+        app.kubernetes.io/version: "latest"
+      annotations:
+        checksum/configmap: "placeholder-replaced-by-ci"
+        checksum/secret: "placeholder-replaced-by-ci"
+    spec:
+      serviceAccountName: resume-analyser-api   # Workers share IRSA role for S3/Bedrock
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Spread worker replicas across AZs
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: resume-analyser-worker
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: resume-analyser-worker
+                topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: worker
+          image: ${REGISTRY}/resume-analyser-worker:${TAG}
+          command: ["./scripts/run_worker.sh"]
+
+          envFrom:
+            - configMapRef:
+                name: resume-analyser-config
+            - secretRef:
+                name: resume-analyser-secrets
+
+          # Workers need substantial RAM for sentence-transformers model loading
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            # readOnlyRootFilesystem is FALSE — HuggingFace writes model cache at runtime
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+
+          # Celery workers don't expose HTTP — use exec probe instead
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.worker
+                - inspect
+                - ping
+                - -d
+                - "celery@$(hostname)"
+                - --timeout
+                - "5"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /home/app/.cache/hf
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        # emptyDir for HuggingFace model cache.
+        # For production, consider an EFS PVC or a node-local PVC with ReadWriteOnce
+        # to persist model downloads across pod restarts.
+        - name: hf-cache
+          emptyDir:
+            sizeLimit: 10Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+
+      # Allow long-running tasks to complete gracefully before SIGKILL
+      terminationGracePeriodSeconds: 120
+      restartPolicy: Always

@@ -1,0 +1,327 @@
+# =============================================================================
+# Default values for ai-resume-analyser Helm chart.
+# Override with -f values-prod.yaml or -f values-dev.yaml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Global
+# ---------------------------------------------------------------------------
+global:
+  # Image registry prefix, e.g. "123456789.dkr.ecr.us-east-1.amazonaws.com"
+  imageRegistry: ""
+  # Optional: image pull secrets for private registries
+  imagePullSecrets: []
+
+# ---------------------------------------------------------------------------
+# Image configuration per component
+# ---------------------------------------------------------------------------
+api:
+  image:
+    registry: ""           # Overrides global.imageRegistry if set
+    repository: resume-analyser-api
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  command: ["./scripts/run_prod.sh"]
+
+worker:
+  image:
+    registry: ""
+    repository: resume-analyser-worker
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  command: ["./scripts/run_worker.sh"]
+
+frontend:
+  image:
+    registry: ""
+    repository: resume-analyser-frontend
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+
+# ---------------------------------------------------------------------------
+# Resource requests and limits
+# ---------------------------------------------------------------------------
+resources:
+  api:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1500m
+      memory: 2Gi
+
+  worker:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
+  frontend:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Init container (alembic migrate)
+  initMigrate:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Autoscaling (HPA)
+# ---------------------------------------------------------------------------
+autoscaling:
+  api:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  worker:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 75
+
+# ---------------------------------------------------------------------------
+# Service Account (IRSA)
+# ---------------------------------------------------------------------------
+serviceAccount:
+  # Create a ServiceAccount for the API and worker
+  create: true
+  name: resume-analyser-api
+  annotations: {}
+  # Set roleArn to enable IRSA (IAM Roles for Service Accounts) on EKS:
+  # roleArn: "arn:aws:iam::ACCOUNT_ID:role/ResumeAnalyserApiRole"
+  roleArn: ""
+
+# ---------------------------------------------------------------------------
+# Namespace
+# ---------------------------------------------------------------------------
+namespace:
+  create: true
+  name: resume-analyser
+
+# ---------------------------------------------------------------------------
+# Non-sensitive configuration (goes into ConfigMap)
+# ---------------------------------------------------------------------------
+env:
+  APP_ENV: "production"
+  LOG_LEVEL: "INFO"
+  LLM_PROVIDER: "openai"
+  LLM_MODEL: "gpt-4o-mini"
+  EMBEDDING_PROVIDER: "local"
+  EMBEDDING_MODEL: "sentence-transformers/all-MiniLM-L6-v2"
+  AWS_REGION: "us-east-1"
+  S3_BUCKET: "ai-resume-analyser-prod"
+  CORS_ORIGINS: "https://resume-analyser.example.com"
+  PROMETHEUS_ENABLED: "true"
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4317"
+
+# ---------------------------------------------------------------------------
+# Sensitive configuration (goes into Secret — use External Secrets in prod)
+# ---------------------------------------------------------------------------
+# WARNING: Do NOT commit real values here.
+# Use External Secrets Operator or Sealed Secrets to inject these at deploy time.
+# See NOTES.txt for the recommended External Secrets pattern.
+secrets:
+  # These are PLACEHOLDERS. Replace via --set secrets.xxx=VALUE or an ESO ExternalSecret.
+  DATABASE_URL: "postgresql+psycopg://REPLACE_USER:REPLACE_PASS@REPLACE_HOST:5432/resume_analyser"
+  REDIS_URL: "redis://REPLACE_HOST:6379/0"
+  CELERY_BROKER_URL: "redis://REPLACE_HOST:6379/1"
+  CELERY_RESULT_BACKEND: "redis://REPLACE_HOST:6379/2"
+  SECRET_KEY: "REPLACE_WITH_64_CHAR_RANDOM_SECRET"
+  OPENAI_API_KEY: "REPLACE_OPENAI_API_KEY"
+
+# External Secrets Operator integration (recommended for production)
+# When enabled, the chart creates an ExternalSecret instead of a plain Secret.
+externalSecrets:
+  enabled: false
+  # SecretStore or ClusterSecretStore to use
+  secretStoreName: "aws-secrets-manager"
+  secretStoreKind: "ClusterSecretStore"
+  # Path in AWS Secrets Manager (e.g. "prod/resume-analyser")
+  remoteSecretPath: "prod/resume-analyser"
+  # Refresh interval
+  refreshInterval: "1h"
+
+# ---------------------------------------------------------------------------
+# External database and cache (AWS RDS + ElastiCache)
+# These values are used only for documentation/health checks; actual connection
+# strings are in secrets above.
+# ---------------------------------------------------------------------------
+externalDatabase:
+  host: "REPLACE_RDS_ENDPOINT.rds.amazonaws.com"
+  port: 5432
+  name: "resume_analyser"
+
+externalRedis:
+  host: "REPLACE_ELASTICACHE_ENDPOINT.cache.amazonaws.com"
+  port: 6379
+
+# ---------------------------------------------------------------------------
+# Ingress (AWS ALB Controller)
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: alb
+  host: resume-analyser.example.com
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/ssl-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    alb.ingress.kubernetes.io/group.name: resume-analyser
+    alb.ingress.kubernetes.io/healthcheck-path: /api/v1/healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+    alb.ingress.kubernetes.io/tags: "Environment=production,Project=ai-resume-analyser"
+  # ACM certificate ARN — required for HTTPS
+  certificateArn: "arn:aws:acm:us-east-1:REPLACE_ACCOUNT_ID:certificate/REPLACE_CERT_ID"
+  tls: []
+
+# ---------------------------------------------------------------------------
+# Pod security contexts
+# ---------------------------------------------------------------------------
+podSecurityContext:
+  api:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  worker:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  frontend:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    fsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+
+containerSecurityContext:
+  api:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false   # HuggingFace cache requires write access
+    capabilities:
+      drop: ["ALL"]
+  worker:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: ["ALL"]
+  frontend:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
+# ---------------------------------------------------------------------------
+# Node scheduling
+# ---------------------------------------------------------------------------
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Topology spread (enabled by default for HA across AZs)
+topologySpreadConstraints:
+  enabled: true
+  maxSkew: 1
+  topologyKey: topology.kubernetes.io/zone
+
+# ---------------------------------------------------------------------------
+# Probes
+# ---------------------------------------------------------------------------
+probes:
+  api:
+    liveness:
+      path: /api/v1/healthz
+      initialDelaySeconds: 30
+      periodSeconds: 15
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      path: /api/v1/readyz
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    startup:
+      path: /api/v1/healthz
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 12
+  frontend:
+    liveness:
+      path: /
+      initialDelaySeconds: 5
+      periodSeconds: 15
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      path: /
+      initialDelaySeconds: 3
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# Monitoring (Prometheus Operator)
+# ---------------------------------------------------------------------------
+monitoring:
+  serviceMonitor:
+    enabled: false
+    namespace: monitoring
+    interval: 30s
+    scrapeTimeout: 10s
+    labels:
+      release: prometheus
+    path: /metrics
+    port: http
+
+# ---------------------------------------------------------------------------
+# Pod Disruption Budget
+# ---------------------------------------------------------------------------
+podDisruptionBudget:
+  api:
+    enabled: true
+    minAvailable: 1
+
+# ---------------------------------------------------------------------------
+# Extra volumes and volume mounts (advanced use)
+# ---------------------------------------------------------------------------
+extraVolumes: []
+extraVolumeMounts: []
+
+# ---------------------------------------------------------------------------
+# Termination grace periods (seconds)
+# ---------------------------------------------------------------------------
+terminationGracePeriodSeconds:
+  api: 60
+  worker: 120
+  frontend: 30

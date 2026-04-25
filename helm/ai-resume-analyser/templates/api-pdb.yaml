@@ -1,0 +1,14 @@
+{{- if .Values.podDisruptionBudget.api.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ai-resume-analyser.fullname" . }}-api
+  namespace: {{ include "ai-resume-analyser.namespace" . }}
+  labels:
+    {{- include "ai-resume-analyser.componentLabels" (dict "component" "api" "root" .) | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.api.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "ai-resume-analyser.componentSelectorLabels" (dict "component" "api" "root" .) | nindent 6 }}
+{{- end }}

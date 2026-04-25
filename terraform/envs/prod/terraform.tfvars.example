@@ -1,0 +1,25 @@
+###############################################################################
+# envs/prod/terraform.tfvars.example
+#
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored — never commit secrets or account IDs.
+###############################################################################
+
+aws_region = "us-east-1"
+
+vpc_cidr = "10.1.0.0/16"
+
+# REQUIRED: restrict to your VPN/bastion/office IP ranges
+cluster_endpoint_public_access_cidrs = ["203.0.113.0/24"]
+
+node_instance_types = ["m6i.large"]
+node_min_size       = 3
+node_max_size       = 10
+node_desired_size   = 3
+
+rds_instance_class = "db.t4g.medium"
+
+redis_node_type = "cache.r7g.large"
+
+# Must be unique globally — use your AWS account ID or a random string
+resume_bucket_suffix = "123456789012"

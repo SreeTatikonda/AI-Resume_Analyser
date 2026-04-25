@@ -1,0 +1,31 @@
+# CODEOWNERS — assigns automatic PR reviewers based on path
+# Syntax: <pattern> <@owner or @org/team>
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Global fallback
+*                                   @sree-tatikonda
+
+# Backend Python application
+/backend/                           @sree-tatikonda
+/backend/app/services/ai/           @sree-tatikonda   # ML / AI code — extra scrutiny
+/backend/app/services/llm/          @sree-tatikonda
+/backend/alembic/                   @sree-tatikonda   # DB migrations
+
+# Frontend
+/frontend/                          @sree-tatikonda
+
+# Infrastructure — Terraform, Helm, Kubernetes
+/terraform/                         @sree-tatikonda
+/helm/                              @sree-tatikonda
+/k8s/                               @sree-tatikonda
+
+# CI/CD workflows — all changes require review
+/.github/workflows/                 @sree-tatikonda
+
+# Observability
+/observability/                     @sree-tatikonda
+
+# Security-sensitive files — always require explicit approval
+/.github/SECURITY.md                @sree-tatikonda
+/docs/SECURITY.md                   @sree-tatikonda
+/backend/app/core/security.py       @sree-tatikonda

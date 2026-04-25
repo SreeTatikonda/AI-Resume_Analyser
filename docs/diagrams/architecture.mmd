@@ -1,0 +1,60 @@
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#6366f1", "primaryTextColor": "#fff", "primaryBorderColor": "#4f46e5", "lineColor": "#94a3b8", "secondaryColor": "#f1f5f9", "tertiaryColor": "#e2e8f0"}}}%%
+
+C4Context
+  title AI Resume Analyser — System Architecture
+
+  Person(user, "User", "Job seeker uploading resume")
+  Person(recruiter, "Recruiter", "Viewing analysis results")
+
+  System_Boundary(aws, "AWS Cloud") {
+
+    System_Boundary(edge, "Edge / CDN") {
+      System(cloudfront, "CloudFront", "Global CDN + WAF\nTLS termination")
+    }
+
+    System_Boundary(eks, "EKS Cluster — resume-analyser namespace") {
+      System(alb, "ALB Ingress\n+ ACM TLS", "Kubernetes Ingress\naws-load-balancer-controller")
+
+      System(frontend, "Frontend Pod\n(nginx)", "React + Vite SPA\nStatic asset serving")
+      System(api, "API Pod\n(FastAPI / Uvicorn)", "REST API\nPrometheus /metrics\n/healthz  /readyz")
+      System(worker, "Worker Pod\n(Celery)", "Async analysis tasks\nPDF parse · Embed · LLM")
+
+      System_Boundary(observability, "Observability") {
+        System(prometheus, "Prometheus", "Metrics scraping\nAlert rules")
+        System(grafana, "Grafana", "Dashboards\nAlerting UI")
+      }
+    }
+
+    System_Boundary(data, "Data Tier") {
+      SystemDb(postgres, "Amazon RDS\n(PostgreSQL 16)", "Users · Analyses\nVector embeddings (pgvector opt.)")
+      SystemDb(redis, "Amazon ElastiCache\n(Redis 7)", "Celery broker + result backend\nRate-limit counters")
+      System(s3, "Amazon S3", "Resume PDF storage\nFAISS index snapshots")
+    }
+
+    System_Boundary(ai, "AI / LLM Providers") {
+      System(bedrock, "Amazon Bedrock", "Claude 3.5 Sonnet\nTitan Embeddings v2")
+      System(openai, "OpenAI API", "GPT-4o-mini\ntext-embedding-3-small")
+    }
+
+    System(secrets, "AWS Secrets Manager\n+ External Secrets Operator", "Runtime secret injection")
+    System(ecr, "Amazon ECR", "Container image registry")
+  }
+
+  Rel(user, cloudfront, "HTTPS")
+  Rel(recruiter, cloudfront, "HTTPS")
+  Rel(cloudfront, alb, "HTTPS")
+  Rel(alb, frontend, "HTTP /")
+  Rel(alb, api, "HTTP /api/v1")
+  Rel(frontend, api, "REST API calls\n(Vite proxy in dev)")
+  Rel(api, postgres, "SQLAlchemy\npsycopg3")
+  Rel(api, redis, "Cache + rate-limit")
+  Rel(api, s3, "boto3 (PDF upload)")
+  Rel(api, worker, "Celery task dispatch\nvia Redis")
+  Rel(worker, postgres, "Write analysis results")
+  Rel(worker, s3, "Read PDFs\nWrite FAISS index")
+  Rel(worker, bedrock, "LLM / Embed inference")
+  Rel(worker, openai, "LLM / Embed inference")
+  Rel(prometheus, api, "Scrape /metrics")
+  Rel(prometheus, worker, "Scrape :8001/metrics")
+  Rel(grafana, prometheus, "PromQL queries")
+  Rel(secrets, api, "Injected as k8s Secrets")

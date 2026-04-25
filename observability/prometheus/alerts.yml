@@ -1,0 +1,246 @@
+groups:
+  # ──────────────────────────────────────────────
+  # API Health
+  # ──────────────────────────────────────────────
+  - name: api.health
+    interval: 30s
+    rules:
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (job)
+            /
+            sum(rate(http_requests_total[5m])) by (job)
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "High 5xx error rate on {{ $labels.job }}"
+          description: >
+            {{ $labels.job }} is returning {{ $value | humanizePercentage }} 5xx errors
+            (threshold: 1%). This has been ongoing for 5 minutes.
+            Check application logs and recent deployments.
+          runbook_url: https://github.com/sree-tatikonda/ai-resume-analyser-pro/wiki/runbooks/high-error-rate
+          dashboard_url: http://grafana:3000/d/api-overview
+
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job, endpoint)
+          ) > 2.0
+        for: 10m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "P95 latency > 2s on {{ $labels.endpoint }}"
+          description: >
+            95th-percentile latency for {{ $labels.job }}/{{ $labels.endpoint }}
+            is {{ $value | humanizeDuration }} (threshold: 2s), sustained 10m.
+          runbook_url: https://github.com/sree-tatikonda/ai-resume-analyser-pro/wiki/runbooks/high-latency
+
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job, endpoint)
+          ) > 10.0
+        for: 5m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "P99 latency > 10s on {{ $labels.endpoint }}"
+          description: >
+            99th-percentile latency for {{ $labels.job }}/{{ $labels.endpoint }}
+            is {{ $value | humanizeDuration }} (threshold: 10s).
+
+  # ──────────────────────────────────────────────
+  # Analysis Pipeline
+  # ──────────────────────────────────────────────
+  - name: analysis.pipeline
+    interval: 30s
+    rules:
+
+      - alert: AnalysisFailures
+        expr: |
+          sum(rate(analysis_failures_total[5m])) by (reason) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: ml
+        annotations:
+          summary: "Analysis failures spiking (reason={{ $labels.reason }})"
+          description: >
+            Analysis failure rate for reason={{ $labels.reason }} is
+            {{ $value | humanize }}/s. Check LLM provider status and
+            PDF parsing logs.
+          runbook_url: https://github.com/sree-tatikonda/ai-resume-analyser-pro/wiki/runbooks/analysis-failures
+
+      - alert: AnalysisFailuresBurst
+        expr: |
+          increase(analysis_failures_total[10m]) > 20
+        labels:
+          severity: critical
+          team: ml
+        annotations:
+          summary: "More than 20 analysis failures in the last 10 minutes"
+          description: >
+            {{ $value }} analysis failures detected in the last 10 minutes.
+            Possible LLM outage or PDF parser regression.
+
+      - alert: LLMTokenSpike
+        expr: |
+          sum(rate(llm_tokens_total[5m])) by (provider, model) > 500
+        for: 5m
+        labels:
+          severity: warning
+          team: ml
+        annotations:
+          summary: "LLM token consumption spike ({{ $labels.provider }}/{{ $labels.model }})"
+          description: >
+            Token consumption rate for {{ $labels.provider }}/{{ $labels.model }}
+            is {{ $value | humanize }} tokens/s (threshold: 500/s).
+            Could indicate runaway processing or an abnormally large batch.
+          cost_estimate: "At $0.002/1K tokens this would be ${{ printf \"%.2f\" (mul $value 0.002 300) }}/5min"
+
+      - alert: LLMProviderTimeout
+        expr: |
+          sum(rate(analysis_failures_total{reason="llm_timeout"}[5m])) > 0.01
+        for: 3m
+        labels:
+          severity: critical
+          team: ml
+        annotations:
+          summary: "LLM provider timing out"
+          description: >
+            LLM timeouts are occurring at {{ $value | humanize }} req/s.
+            Verify provider API status and check OPENAI_API_KEY / Bedrock quotas.
+
+  # ──────────────────────────────────────────────
+  # Celery Worker / Queue
+  # ──────────────────────────────────────────────
+  - name: worker.queue
+    interval: 30s
+    rules:
+
+      - alert: WorkerQueueGrowing
+        expr: |
+          redis_list_length{key="celery"} > 100
+        for: 10m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Celery queue depth > 100"
+          description: >
+            The celery queue has {{ $value }} pending tasks and has been growing
+            for 10 minutes. Consider scaling up worker replicas.
+          runbook_url: https://github.com/sree-tatikonda/ai-resume-analyser-pro/wiki/runbooks/worker-queue
+
+      - alert: WorkerQueueCritical
+        expr: |
+          redis_list_length{key="celery"} > 500
+        for: 5m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Celery queue critically backed up ({{ $value }} tasks)"
+          description: >
+            Queue depth has reached {{ $value }} — workers cannot keep up.
+            Immediate action required: scale workers or investigate blocking tasks.
+
+  # ──────────────────────────────────────────────
+  # Kubernetes / Infrastructure
+  # ──────────────────────────────────────────────
+  - name: kubernetes.pods
+    interval: 30s
+    rules:
+
+      - alert: PodCrashLooping
+        expr: |
+          increase(kube_pod_container_status_restarts_total{
+            namespace="resume-analyser"
+          }[15m]) > 3
+        labels:
+          severity: critical
+          team: infra
+        annotations:
+          summary: "Pod {{ $labels.pod }}/{{ $labels.container }} is crash-looping"
+          description: >
+            Container {{ $labels.container }} in pod {{ $labels.pod }}
+            (namespace: {{ $labels.namespace }}) has restarted {{ $value }} times
+            in the last 15 minutes.
+          runbook_url: https://github.com/sree-tatikonda/ai-resume-analyser-pro/wiki/runbooks/pod-crash-loop
+
+      - alert: PodNotReady
+        expr: |
+          kube_pod_status_ready{
+            namespace="resume-analyser",
+            condition="true"
+          } == 0
+        for: 5m
+        labels:
+          severity: warning
+          team: infra
+        annotations:
+          summary: "Pod {{ $labels.pod }} has been not-ready for 5m"
+          description: >
+            Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is not ready.
+            Check `kubectl describe pod {{ $labels.pod }} -n {{ $labels.namespace }}`.
+
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            container_memory_working_set_bytes{
+              namespace="resume-analyser",
+              container!=""
+            }
+            /
+            container_spec_memory_limit_bytes{
+              namespace="resume-analyser",
+              container!=""
+            }
+          ) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          team: infra
+        annotations:
+          summary: "Container {{ $labels.container }} memory > 85%"
+          description: >
+            {{ $labels.container }} in {{ $labels.pod }} is using
+            {{ $value | humanizePercentage }} of its memory limit.
+            Risk of OOMKill. Consider increasing limits or investigating memory leak.
+
+      - alert: HighCPUUsage
+        expr: |
+          (
+            rate(container_cpu_usage_seconds_total{
+              namespace="resume-analyser",
+              container!=""
+            }[5m])
+            /
+            container_spec_cpu_quota{
+              namespace="resume-analyser",
+              container!=""
+            }
+            * container_spec_cpu_period{
+              namespace="resume-analyser",
+              container!=""
+            }
+          ) > 0.90
+        for: 10m
+        labels:
+          severity: warning
+          team: infra
+        annotations:
+          summary: "Container {{ $labels.container }} CPU > 90% of limit"
+          description: >
+            {{ $labels.container }} is using {{ $value | humanizePercentage }}
+            of its CPU limit. API response times may degrade.

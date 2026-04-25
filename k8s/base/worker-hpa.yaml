@@ -1,0 +1,46 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: resume-analyser-worker
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/name: resume-analyser-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: resume-analyser-worker
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    # Scale primarily on CPU (sentence-transformers inference is CPU-bound)
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Scale on memory as a secondary signal (model loading)
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      # Longer stabilization for workers — in-flight tasks need to complete
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 180

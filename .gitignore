@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Node / Vite
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+.parcel-cache/
+*.log
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+override.tf
+override.tf.json
+.terraform.lock.hcl
+
+# Helm
+charts/*.tgz
+
+# Models / caches
+.cache/
+hf_cache/
+
+# Docker
+*.pid

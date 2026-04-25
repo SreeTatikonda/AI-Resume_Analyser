@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-resume-analyser.fullname" . }}-worker
+  namespace: {{ include "ai-resume-analyser.namespace" . }}
+  labels:
+    {{- include "ai-resume-analyser.componentLabels" (dict "component" "worker" "root" .) | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.worker.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "ai-resume-analyser.componentSelectorLabels" (dict "component" "worker" "root" .) | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        {{- include "ai-resume-analyser.componentLabels" (dict "component" "worker" "root" .) | nindent 8 }}
+      annotations:
+        checksum/configmap: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "ai-resume-analyser.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext.worker }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- if .Values.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+        {{- include "ai-resume-analyser.topologySpread" (dict "component" "worker" "root" .) | nindent 8 }}
+      {{- end }}
+
+      affinity:
+        {{- include "ai-resume-analyser.podAntiAffinity" (dict "component" "worker" "root" .) | nindent 8 }}
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      containers:
+        - name: worker
+          image: {{ include "ai-resume-analyser.image" (dict "component" .Values.worker "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          {{- with .Values.worker.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
+          envFrom:
+            - configMapRef:
+                name: {{ include "ai-resume-analyser.fullname" . }}-config
+            - secretRef:
+                name: {{ include "ai-resume-analyser.fullname" . }}-secrets
+
+          resources:
+            {{- toYaml .Values.resources.worker | nindent 12 }}
+
+          {{- with .Values.containerSecurityContext.worker }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
+          # Celery liveness probe via celery inspect ping
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.worker
+                - inspect
+                - ping
+                - -d
+                - "celery@$(hostname)"
+                - --timeout
+                - "5"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 15
+            failureThreshold: 3
+
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /home/app/.cache/hf
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+
+      volumes:
+        - name: hf-cache
+          emptyDir:
+            sizeLimit: 10Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds.worker }}

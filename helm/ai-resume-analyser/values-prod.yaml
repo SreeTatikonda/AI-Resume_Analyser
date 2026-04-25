@@ -1,0 +1,90 @@
+# =============================================================================
+# Production overrides for ai-resume-analyser Helm chart.
+# Apply with: helm upgrade --install ai-resume-analyser . -f values-prod.yaml
+# =============================================================================
+
+api:
+  replicaCount: 3
+  image:
+    tag: "1.0.0"   # Set via CI: --set api.image.tag=$(git rev-parse --short HEAD)
+
+worker:
+  replicaCount: 3
+  image:
+    tag: "1.0.0"
+
+frontend:
+  replicaCount: 3
+  image:
+    tag: "1.0.0"
+
+autoscaling:
+  api:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+  worker:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 8
+
+env:
+  APP_ENV: "production"
+  LOG_LEVEL: "INFO"
+  CORS_ORIGINS: "https://resume-analyser.example.com"
+  S3_BUCKET: "ai-resume-analyser-prod"
+  PROMETHEUS_ENABLED: "true"
+  OTEL_ENABLED: "true"
+
+serviceAccount:
+  create: true
+  roleArn: "arn:aws:iam::REPLACE_ACCOUNT_ID:role/ResumeAnalyserApiRole-prod"
+
+# Use External Secrets Operator in production — do NOT set raw secret values here
+externalSecrets:
+  enabled: true
+  secretStoreName: "aws-secrets-manager"
+  secretStoreKind: "ClusterSecretStore"
+  remoteSecretPath: "prod/resume-analyser"
+  refreshInterval: "1h"
+
+ingress:
+  enabled: true
+  host: resume-analyser.example.com
+  certificateArn: "arn:aws:acm:us-east-1:REPLACE_ACCOUNT_ID:certificate/REPLACE_PROD_CERT_ID"
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/load-balancer-attributes: >-
+      idle_timeout.timeout_seconds=120,
+      deletion_protection.enabled=true,
+      access_logs.s3.enabled=true,
+      access_logs.s3.bucket=ai-resume-analyser-alb-logs,
+      access_logs.s3.prefix=prod
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    labels:
+      release: prometheus
+
+podDisruptionBudget:
+  api:
+    enabled: true
+    minAvailable: 2
+
+resources:
+  api:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1500m
+      memory: 2Gi
+  worker:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi

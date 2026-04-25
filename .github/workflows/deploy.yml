@@ -1,0 +1,206 @@
+name: Deploy
+
+on:
+  # Manual dispatch — choose environment and optional image tag override
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+        default: dev
+      image_tag:
+        description: "Image tag to deploy (default: latest short SHA on main)"
+        required: false
+        default: ""
+
+  # Automatic deploy to prod on version tags
+  push:
+    tags: ["v*"]
+
+permissions:
+  id-token: write
+  contents: read
+  deployments: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'ai-resume-analyser' }}
+  HELM_RELEASE: ai-resume-analyser
+  HELM_NAMESPACE: resume-analyser
+  HELM_CHART: helm/ai-resume-analyser
+
+jobs:
+  deploy:
+    name: Deploy → ${{ github.event.inputs.environment || 'prod' }}
+    runs-on: ubuntu-latest
+
+    # ── Environment protection rules ──────────────────────────────────────────
+    # Configure in GitHub → Settings → Environments:
+    #   - prod: require 1 reviewer + restrict to protected branches/tags
+    #   - staging: auto-deploy on main
+    #   - dev: no restrictions
+    environment:
+      name: ${{ github.event.inputs.environment || 'prod' }}
+      url: ${{ steps.deploy.outputs.app_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Resolve deploy parameters ──────────────────────────────────────────
+      - name: Resolve environment and image tag
+        id: params
+        run: |
+          ENV="${{ github.event.inputs.environment }}"
+          if [[ -z "$ENV" ]]; then
+            # Auto-triggered by tag push → always deploy to prod
+            ENV="prod"
+          fi
+
+          TAG="${{ github.event.inputs.image_tag }}"
+          if [[ -z "$TAG" ]]; then
+            if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+              TAG="${GITHUB_REF_NAME}"
+            else
+              TAG="${GITHUB_SHA::8}"
+            fi
+          fi
+
+          echo "env=${ENV}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          VALUES_FILE="helm/ai-resume-analyser/values-${ENV}.yaml"
+          if [[ ! -f "$VALUES_FILE" ]]; then
+            VALUES_FILE="helm/ai-resume-analyser/values.yaml"
+          fi
+          echo "values_file=${VALUES_FILE}" >> "$GITHUB_OUTPUT"
+
+      # ── AWS Credentials ────────────────────────────────────────────────────
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-deploy-${{ steps.params.outputs.env }}
+
+      # ── Kubeconfig ─────────────────────────────────────────────────────────
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$EKS_CLUSTER_NAME" \
+            --alias "$EKS_CLUSTER_NAME"
+
+      # ── Helm setup ────────────────────────────────────────────────────────
+      - uses: azure/setup-helm@v4
+        with:
+          version: "3.14.0"
+
+      # ── Helm upgrade --install ────────────────────────────────────────────
+      - name: Helm deploy
+        id: deploy
+        env:
+          ENV: ${{ steps.params.outputs.env }}
+          TAG: ${{ steps.params.outputs.tag }}
+          VALUES_FILE: ${{ steps.params.outputs.values_file }}
+        run: |
+          helm upgrade --install "$HELM_RELEASE" "$HELM_CHART" \
+            --namespace "$HELM_NAMESPACE" \
+            --create-namespace \
+            --values "$VALUES_FILE" \
+            --set image.api.tag="$TAG" \
+            --set image.worker.tag="$TAG" \
+            --set image.frontend.tag="$TAG" \
+            --set image.api.registry="$ECR_REGISTRY" \
+            --set image.worker.registry="$ECR_REGISTRY" \
+            --set image.frontend.registry="$ECR_REGISTRY" \
+            --set global.environment="$ENV" \
+            --set global.deployedAt="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --atomic \
+            --timeout 10m \
+            --wait \
+            --wait-for-jobs
+
+          # Extract the ingress URL for the environment output
+          APP_URL=$(kubectl get ingress -n "$HELM_NAMESPACE" \
+            -o jsonpath='{.items[0].spec.rules[0].host}' 2>/dev/null || echo "")
+          echo "app_url=https://${APP_URL}" >> "$GITHUB_OUTPUT"
+
+      # ── Helm test ──────────────────────────────────────────────────────────
+      - name: Helm test
+        run: |
+          helm test "$HELM_RELEASE" \
+            --namespace "$HELM_NAMESPACE" \
+            --timeout 5m
+        continue-on-error: false
+
+      # ── Smoke test ─────────────────────────────────────────────────────────
+      - name: Smoke test — health endpoints
+        env:
+          APP_URL: ${{ steps.deploy.outputs.app_url }}
+        run: |
+          if [[ -z "$APP_URL" || "$APP_URL" == "https://" ]]; then
+            echo "No ingress URL available, skipping smoke test"
+            exit 0
+          fi
+          echo "Smoke testing ${APP_URL}/api/v1/healthz ..."
+          for i in {1..5}; do
+            STATUS=$(curl -fsSo /dev/null -w "%{http_code}" "${APP_URL}/api/v1/healthz" || echo "000")
+            if [[ "$STATUS" == "200" ]]; then
+              echo "Health check passed (attempt $i)"
+              break
+            fi
+            echo "Attempt $i failed (HTTP $STATUS), retrying in 10s..."
+            sleep 10
+          done
+
+      # ── Slack notification ─────────────────────────────────────────────────
+      - name: Notify Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ENV: ${{ steps.params.outputs.env }}
+          TAG: ${{ steps.params.outputs.tag }}
+          STATUS: ${{ job.status }}
+        run: |
+          if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+            echo "SLACK_WEBHOOK_URL not set — skipping notification"
+            exit 0
+          fi
+
+          COLOR="good"
+          EMOJI=":rocket:"
+          if [[ "$STATUS" != "success" ]]; then
+            COLOR="danger"
+            EMOJI=":x:"
+          fi
+
+          curl -fsS -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"attachments\": [{
+                \"color\": \"$COLOR\",
+                \"title\": \"$EMOJI Deploy to \`${ENV}\` — ${STATUS}\",
+                \"fields\": [
+                  {\"title\": \"Environment\", \"value\": \"${ENV}\", \"short\": true},
+                  {\"title\": \"Image Tag\", \"value\": \"${TAG}\", \"short\": true},
+                  {\"title\": \"Commit\", \"value\": \"${GITHUB_SHA::8}\", \"short\": true},
+                  {\"title\": \"Actor\", \"value\": \"${GITHUB_ACTOR}\", \"short\": true}
+                ],
+                \"footer\": \"GitHub Actions\",
+                \"ts\": $(date +%s)
+              }]
+            }"
+
+      # ── Summary ────────────────────────────────────────────────────────────
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## Deploy Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | --- |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Environment** | ${{ steps.params.outputs.env }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Image tag** | \`${{ steps.params.outputs.tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **App URL** | ${{ steps.deploy.outputs.app_url }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Status** | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"

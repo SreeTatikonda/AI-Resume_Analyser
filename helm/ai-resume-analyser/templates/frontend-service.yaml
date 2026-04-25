@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-resume-analyser.fullname" . }}-frontend
+  namespace: {{ include "ai-resume-analyser.namespace" . }}
+  labels:
+    {{- include "ai-resume-analyser.componentLabels" (dict "component" "frontend" "root" .) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ai-resume-analyser.componentSelectorLabels" (dict "component" "frontend" "root" .) | nindent 4 }}
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http

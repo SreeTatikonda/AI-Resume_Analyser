@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-resume-analyser.fullname" . }}-frontend
+  namespace: {{ include "ai-resume-analyser.namespace" . }}
+  labels:
+    {{- include "ai-resume-analyser.componentLabels" (dict "component" "frontend" "root" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-resume-analyser.componentSelectorLabels" (dict "component" "frontend" "root" .) | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "ai-resume-analyser.componentLabels" (dict "component" "frontend" "root" .) | nindent 8 }}
+    spec:
+      # Frontend pods do not need AWS credentials
+      automountServiceAccountToken: false
+
+      {{- with .Values.podSecurityContext.frontend }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- if .Values.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+        {{- include "ai-resume-analyser.topologySpread" (dict "component" "frontend" "root" .) | nindent 8 }}
+      {{- end }}
+
+      affinity:
+        {{- include "ai-resume-analyser.podAntiAffinity" (dict "component" "frontend" "root" .) | nindent 8 }}
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      containers:
+        - name: frontend
+          image: {{ include "ai-resume-analyser.image" (dict "component" .Values.frontend "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+
+          resources:
+            {{- toYaml .Values.resources.frontend | nindent 12 }}
+
+          {{- with .Values.containerSecurityContext.frontend }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.frontend.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.frontend.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.frontend.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.frontend.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.frontend.liveness.failureThreshold }}
+
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.frontend.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.frontend.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.frontend.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.frontend.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.frontend.readiness.failureThreshold }}
+
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: nginx-tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: nginx-tmp
+          emptyDir: {}
+
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds.frontend }}

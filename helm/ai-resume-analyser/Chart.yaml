@@ -1,0 +1,34 @@
+apiVersion: v2
+name: ai-resume-analyser
+description: >
+  Production-grade Helm chart for the AI Resume Analyser platform.
+  Deploys a FastAPI backend, Celery worker, and nginx-served React frontend.
+  Relies on external AWS RDS (PostgreSQL) and ElastiCache (Redis).
+
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+
+keywords:
+  - ai
+  - resume
+  - nlp
+  - fastapi
+  - celery
+  - react
+
+home: https://github.com/your-org/ai-resume-analyser-pro
+sources:
+  - https://github.com/your-org/ai-resume-analyser-pro
+
+maintainers:
+  - name: Platform Engineering
+    email: platform@your-org.com
+
+icon: https://your-org.com/icons/ai-resume-analyser.png
+
+annotations:
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial chart release
+  artifacthub.io/license: MIT

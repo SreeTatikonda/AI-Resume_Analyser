@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: resume-analyser-api
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/name: resume-analyser-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    # Prometheus service-level scrape (used by ServiceMonitor if Prometheus Operator is installed)
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: resume-analyser-api
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http    # references containerPort name "http" = 8000

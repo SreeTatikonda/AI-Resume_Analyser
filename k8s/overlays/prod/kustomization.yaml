@@ -1,0 +1,130 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: resume-analyser
+
+resources:
+  - ../../base
+
+patches:
+  # --- API: 3 replicas in prod ---
+  - target:
+      kind: Deployment
+      name: resume-analyser-api
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+
+  # --- Worker: 3 replicas in prod ---
+  - target:
+      kind: Deployment
+      name: resume-analyser-worker
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+
+  # --- Frontend: 3 replicas in prod ---
+  - target:
+      kind: Deployment
+      name: resume-analyser-frontend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+
+  # --- HPA: full scale range for prod ---
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: resume-analyser-api
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 3
+      - op: replace
+        path: /spec/maxReplicas
+        value: 10
+
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: resume-analyser-worker
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 3
+      - op: replace
+        path: /spec/maxReplicas
+        value: 8
+
+  # --- PDB: stricter in prod (keep 2 available) ---
+  - target:
+      kind: PodDisruptionBudget
+      name: resume-analyser-api
+    patch: |-
+      - op: replace
+        path: /spec/minAvailable
+        value: 2
+
+  # --- API resource limits: sized for prod traffic ---
+  - target:
+      kind: Deployment
+      name: resume-analyser-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "500m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "512Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "1500m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "2Gi"
+
+  # --- Worker resource limits: sized for sentence-transformers in prod ---
+  - target:
+      kind: Deployment
+      name: resume-analyser-worker
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "500m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "1Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2000m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "4Gi"
+
+  # --- ConfigMap: prod-specific env vars ---
+  - target:
+      kind: ConfigMap
+      name: resume-analyser-config
+    patch: |-
+      - op: replace
+        path: /data/APP_ENV
+        value: production
+      - op: replace
+        path: /data/LOG_LEVEL
+        value: INFO
+      - op: replace
+        path: /data/CORS_ORIGINS
+        value: "https://resume-analyser.example.com"
+      - op: replace
+        path: /data/S3_BUCKET
+        value: ai-resume-analyser-prod
+
+# Image tag overrides for prod (set via CI/CD, e.g. git SHA or semver)
+images:
+  - name: ${REGISTRY}/resume-analyser-api
+    newTag: "1.0.0"
+  - name: ${REGISTRY}/resume-analyser-worker
+    newTag: "1.0.0"
+  - name: ${REGISTRY}/resume-analyser-frontend
+    newTag: "1.0.0"

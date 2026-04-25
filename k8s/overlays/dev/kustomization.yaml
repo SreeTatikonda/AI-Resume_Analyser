@@ -1,0 +1,118 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: resume-analyser-dev
+
+resources:
+  - ../../base
+
+patches:
+  # --- Namespace patch ---
+  - target:
+      kind: Namespace
+      name: resume-analyser
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: resume-analyser-dev
+
+  # --- API: 1 replica in dev ---
+  - target:
+      kind: Deployment
+      name: resume-analyser-api
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  # --- Worker: 1 replica in dev ---
+  - target:
+      kind: Deployment
+      name: resume-analyser-worker
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  # --- Frontend: 1 replica in dev ---
+  - target:
+      kind: Deployment
+      name: resume-analyser-frontend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  # --- HPA: lower min/max replicas in dev ---
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: resume-analyser-api
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: resume-analyser-worker
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+
+  # --- PDB: not critical in dev ---
+  - target:
+      kind: PodDisruptionBudget
+      name: resume-analyser-api
+    patch: |-
+      - op: replace
+        path: /spec/minAvailable
+        value: 0
+
+  # --- Ingress: dev hostname, internal ALB ---
+  - target:
+      kind: Ingress
+      name: resume-analyser
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: dev.resume-analyser.example.com
+      - op: replace
+        path: /metadata/annotations/alb.ingress.kubernetes.io~1scheme
+        value: internal
+
+  # --- ConfigMap: dev-specific env vars ---
+  - target:
+      kind: ConfigMap
+      name: resume-analyser-config
+    patch: |-
+      - op: replace
+        path: /data/APP_ENV
+        value: development
+      - op: replace
+        path: /data/LOG_LEVEL
+        value: DEBUG
+      - op: replace
+        path: /data/CORS_ORIGINS
+        value: "https://dev.resume-analyser.example.com,http://localhost:5173"
+      - op: replace
+        path: /data/S3_BUCKET
+        value: ai-resume-analyser-dev
+      - op: add
+        path: /data/OTEL_ENABLED
+        value: "false"
+
+# Image tag overrides for dev environment
+images:
+  - name: ${REGISTRY}/resume-analyser-api
+    newTag: dev
+  - name: ${REGISTRY}/resume-analyser-worker
+    newTag: dev
+  - name: ${REGISTRY}/resume-analyser-frontend
+    newTag: dev

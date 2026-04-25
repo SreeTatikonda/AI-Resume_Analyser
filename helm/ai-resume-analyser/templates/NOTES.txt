@@ -1,0 +1,160 @@
+============================================================
+  AI Resume Analyser — Helm Deployment Summary
+============================================================
+
+Release:   {{ .Release.Name }}
+Namespace: {{ include "ai-resume-analyser.namespace" . }}
+Chart:     {{ .Chart.Name }}-{{ .Chart.Version }}
+App:       v{{ .Chart.AppVersion }}
+
+------------------------------------------------------------
+  Application URLs
+------------------------------------------------------------
+
+{{- if .Values.ingress.enabled }}
+  Frontend: https://{{ .Values.ingress.host }}/
+  API:      https://{{ .Values.ingress.host }}/api/v1/
+  Docs:     https://{{ .Values.ingress.host }}/api/v1/docs
+
+  Health checks:
+    Liveness:  https://{{ .Values.ingress.host }}/api/v1/healthz
+    Readiness: https://{{ .Values.ingress.host }}/api/v1/readyz
+    Metrics:   https://{{ .Values.ingress.host }}/metrics
+{{- else }}
+  Ingress is disabled. Port-forward to access the API:
+    kubectl port-forward -n {{ include "ai-resume-analyser.namespace" . }} \
+      svc/{{ include "ai-resume-analyser.fullname" . }}-api 8000:80
+
+  Then open: http://localhost:8000/api/v1/docs
+{{- end }}
+
+------------------------------------------------------------
+  Component Status
+------------------------------------------------------------
+
+Check all pods are Running:
+  kubectl get pods -n {{ include "ai-resume-analyser.namespace" . }} \
+    -l app.kubernetes.io/part-of=ai-resume-analyser
+
+Watch rollout status:
+  kubectl rollout status deployment/{{ include "ai-resume-analyser.fullname" . }}-api \
+    -n {{ include "ai-resume-analyser.namespace" . }}
+  kubectl rollout status deployment/{{ include "ai-resume-analyser.fullname" . }}-worker \
+    -n {{ include "ai-resume-analyser.namespace" . }}
+  kubectl rollout status deployment/{{ include "ai-resume-analyser.fullname" . }}-frontend \
+    -n {{ include "ai-resume-analyser.namespace" . }}
+
+------------------------------------------------------------
+  Secret Management (IMPORTANT)
+------------------------------------------------------------
+
+{{- if .Values.externalSecrets.enabled }}
+  External Secrets Operator is ENABLED.
+  Secrets are synced from: {{ .Values.externalSecrets.secretStoreName }}
+  Remote path: {{ .Values.externalSecrets.remoteSecretPath }}
+
+  Verify the ExternalSecret status:
+    kubectl get externalsecret -n {{ include "ai-resume-analyser.namespace" . }}
+    kubectl describe externalsecret {{ include "ai-resume-analyser.fullname" . }}-secrets \
+      -n {{ include "ai-resume-analyser.namespace" . }}
+
+  Required keys in AWS Secrets Manager at "{{ .Values.externalSecrets.remoteSecretPath }}":
+    database_url, redis_url, celery_broker_url, celery_result_backend,
+    secret_key, openai_api_key
+
+{{- else }}
+  WARNING: External Secrets Operator is DISABLED.
+  A plain Kubernetes Secret was created from values.secrets.
+  DO NOT use this in production with real credentials committed to source control.
+
+  For production, enable External Secrets Operator:
+    1. Install ESO:
+       helm repo add external-secrets https://charts.external-secrets.io
+       helm install external-secrets external-secrets/external-secrets \
+         -n external-secrets --create-namespace
+
+    2. Create a ClusterSecretStore pointing to AWS Secrets Manager.
+
+    3. Store secrets in AWS Secrets Manager under the path configured in
+       values.externalSecrets.remoteSecretPath.
+
+    4. Re-deploy with:
+       helm upgrade {{ .Release.Name }} . \
+         -f values-prod.yaml \
+         --set externalSecrets.enabled=true
+
+  Alternative: Bitnami Sealed Secrets
+    kubeseal --fetch-cert --controller-namespace=kube-system > pub-cert.pem
+    kubectl create secret generic {{ include "ai-resume-analyser.fullname" . }}-secrets \
+      --dry-run=client -o yaml | \
+      kubeseal --cert pub-cert.pem -o yaml > sealed-secret.yaml
+    kubectl apply -f sealed-secret.yaml
+{{- end }}
+
+------------------------------------------------------------
+  IRSA (IAM Roles for Service Accounts)
+------------------------------------------------------------
+
+{{- if .Values.serviceAccount.roleArn }}
+  ServiceAccount "{{ include "ai-resume-analyser.serviceAccountName" . }}" is annotated with:
+    eks.amazonaws.com/role-arn: {{ .Values.serviceAccount.roleArn }}
+
+  Verify IRSA is working:
+    kubectl exec -n {{ include "ai-resume-analyser.namespace" . }} \
+      deploy/{{ include "ai-resume-analyser.fullname" . }}-api -- \
+      aws sts get-caller-identity
+{{- else }}
+  IRSA is not configured (serviceAccount.roleArn is empty).
+  Set serviceAccount.roleArn to enable IAM Roles for Service Accounts.
+  See: https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
+{{- end }}
+
+------------------------------------------------------------
+  Monitoring
+------------------------------------------------------------
+
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+  ServiceMonitor is enabled. Prometheus should discover the API metrics endpoint.
+  Verify scrape targets in Prometheus UI under Status > Targets.
+
+  Query example (PromQL):
+    http_requests_total{namespace="{{ include "ai-resume-analyser.namespace" . }}"}
+{{- else }}
+  ServiceMonitor is disabled. To enable Prometheus Operator scraping:
+    --set monitoring.serviceMonitor.enabled=true
+{{- end }}
+
+------------------------------------------------------------
+  Running Helm Tests
+------------------------------------------------------------
+
+  helm test {{ .Release.Name }} -n {{ include "ai-resume-analyser.namespace" . }}
+
+------------------------------------------------------------
+  Scaling
+------------------------------------------------------------
+
+  Manual scale API:
+    kubectl scale deployment {{ include "ai-resume-analyser.fullname" . }}-api \
+      --replicas=5 -n {{ include "ai-resume-analyser.namespace" . }}
+
+  Check HPA status:
+    kubectl get hpa -n {{ include "ai-resume-analyser.namespace" . }}
+
+------------------------------------------------------------
+  Useful commands
+------------------------------------------------------------
+
+  View API logs:
+    kubectl logs -f -l app.kubernetes.io/component=api \
+      -n {{ include "ai-resume-analyser.namespace" . }} --tail=100
+
+  View worker logs:
+    kubectl logs -f -l app.kubernetes.io/component=worker \
+      -n {{ include "ai-resume-analyser.namespace" . }} --tail=100
+
+  Open a shell in the API container:
+    kubectl exec -it -n {{ include "ai-resume-analyser.namespace" . }} \
+      deploy/{{ include "ai-resume-analyser.fullname" . }}-api -- /bin/bash
+
+============================================================

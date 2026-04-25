@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: resume-analyser-frontend
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/name: resume-analyser-frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: resume-analyser-frontend
+    app.kubernetes.io/component: frontend
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http    # references containerPort name "http" = 80

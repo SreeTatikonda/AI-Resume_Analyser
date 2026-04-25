@@ -1,0 +1,18 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: resume-analyser-api
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/name: resume-analyser-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  # Ensure at least 1 API replica is always available during voluntary disruptions
+  # (node drains, cluster upgrades, etc.)
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: resume-analyser-api
+      app.kubernetes.io/component: api

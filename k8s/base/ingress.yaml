@@ -1,0 +1,90 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: resume-analyser
+  namespace: resume-analyser
+  labels:
+    app.kubernetes.io/name: resume-analyser
+    app.kubernetes.io/part-of: ai-resume-analyser
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    # -------------------------------------------------------------------------
+    # AWS Load Balancer Controller annotations
+    # Docs: https://kubernetes-sigs.github.io/aws-load-balancer-controller/
+    # -------------------------------------------------------------------------
+
+    # Provision an internet-facing ALB (use "internal" for private VPC access)
+    alb.ingress.kubernetes.io/scheme: internet-facing
+
+    # Route traffic directly to pod IPs (IP mode required for fargate + faster)
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # Listen on both HTTP (for redirect) and HTTPS
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+
+    # Redirect all HTTP traffic to HTTPS
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+
+    # ACM certificate ARN — replace with your actual certificate ARN
+    # Run: aws acm list-certificates --region us-east-1
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:REPLACE_ACCOUNT_ID:certificate/REPLACE_CERT_ID"
+
+    # Security policy — use recommended TLS 1.2+ policy
+    alb.ingress.kubernetes.io/ssl-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"
+
+    # ALB is shared within the namespace (use "external" group for cross-namespace sharing)
+    alb.ingress.kubernetes.io/group.name: resume-analyser
+
+    # Health check settings for ALB target groups
+    alb.ingress.kubernetes.io/healthcheck-path: /api/v1/healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+
+    # Stickiness (optional — enable if sessions matter)
+    # alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=86400
+
+    # WAF WebACL ARN (optional — uncomment and replace ARN to enable AWS WAF)
+    # alb.ingress.kubernetes.io/wafv2-acl-arn: "arn:aws:wafv2:us-east-1:REPLACE_ACCOUNT_ID:regional/webacl/REPLACE_WEBACL_ID"
+
+    # Load balancer attributes
+    alb.ingress.kubernetes.io/load-balancer-attributes: >-
+      idle_timeout.timeout_seconds=120,
+      deletion_protection.enabled=true,
+      access_logs.s3.enabled=false
+
+    # Tags applied to the ALB
+    alb.ingress.kubernetes.io/tags: "Environment=production,Project=ai-resume-analyser"
+
+spec:
+  ingressClassName: alb
+  rules:
+    # Replace "resume-analyser.example.com" with your actual domain
+    - host: resume-analyser.example.com
+      http:
+        paths:
+          # API routes — forward to FastAPI backend
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: resume-analyser-api
+                port:
+                  name: http
+          # Metrics endpoint (restrict via WAF/security group in production)
+          - path: /metrics
+            pathType: Exact
+            backend:
+              service:
+                name: resume-analyser-api
+                port:
+                  name: http
+          # All other routes — serve the React SPA
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: resume-analyser-frontend
+                port:
+                  name: http

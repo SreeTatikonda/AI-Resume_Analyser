@@ -1,0 +1,160 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-resume-analyser.fullname" . }}-api
+  namespace: {{ include "ai-resume-analyser.namespace" . }}
+  labels:
+    {{- include "ai-resume-analyser.componentLabels" (dict "component" "api" "root" .) | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  {{- if not .Values.autoscaling.api.enabled }}
+  replicas: {{ .Values.api.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "ai-resume-analyser.componentSelectorLabels" (dict "component" "api" "root" .) | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "ai-resume-analyser.componentLabels" (dict "component" "api" "root" .) | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+        # Trigger rolling update when ConfigMap or Secret changes
+        checksum/configmap: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "ai-resume-analyser.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext.api }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- if .Values.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+        {{- include "ai-resume-analyser.topologySpread" (dict "component" "api" "root" .) | nindent 8 }}
+      {{- end }}
+
+      affinity:
+        {{- include "ai-resume-analyser.podAntiAffinity" (dict "component" "api" "root" .) | nindent 8 }}
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      initContainers:
+        - name: alembic-migrate
+          image: {{ include "ai-resume-analyser.image" (dict "component" .Values.api "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "ai-resume-analyser.fullname" . }}-config
+            - secretRef:
+                name: {{ include "ai-resume-analyser.fullname" . }}-secrets
+          resources:
+            {{- toYaml .Values.resources.initMigrate | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+
+      containers:
+        - name: api
+          image: {{ include "ai-resume-analyser.image" (dict "component" .Values.api "global" .Values.global) }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          {{- with .Values.api.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: {{ include "ai-resume-analyser.fullname" . }}-config
+            - secretRef:
+                name: {{ include "ai-resume-analyser.fullname" . }}-secrets
+
+          resources:
+            {{- toYaml .Values.resources.api | nindent 12 }}
+
+          {{- with .Values.containerSecurityContext.api }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.api.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.api.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.api.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.api.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.api.liveness.failureThreshold }}
+
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.api.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.api.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.api.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.api.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.api.readiness.failureThreshold }}
+
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.api.startup.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.api.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.api.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.api.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.api.startup.failureThreshold }}
+
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /home/app/.cache/hf
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+
+      volumes:
+        - name: hf-cache
+          emptyDir:
+            sizeLimit: 5Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds.api }}

@@ -1,0 +1,58 @@
+sequenceDiagram
+    autonumber
+    actor User
+    participant FE as Frontend<br/>(React)
+    participant API as API<br/>(FastAPI)
+    participant DB as PostgreSQL
+    participant S3
+    participant Worker as Celery Worker
+    participant Parse as PDF Parser<br/>(PyMuPDF)
+    participant Extract as Skill Extractor<br/>(taxonomy + fuzzy)
+    participant Embed as Embedding Service<br/>(sentence-transformers)
+    participant Vector as Vector Store<br/>(FAISS / pgvector)
+    participant LLM as LLM Client<br/>(OpenAI / Bedrock)
+    participant Metrics as Prometheus
+
+    User->>+FE: Upload resume.pdf + job description
+    FE->>+API: POST /api/v1/analyses<br/>multipart/form-data
+
+    note over API: Rate-limit check (slowapi)<br/>10 req/min per IP
+
+    API->>API: Validate file type (PDF only)<br/>Validate size (≤ 10 MB)
+    API->>DB: INSERT analysis (status=processing)
+    DB-->>API: analysis.id (UUID)
+    API->>S3: PUT resume/{id}.pdf (optional)
+
+    note over API,Worker: Sync path (default) — no Celery
+
+    API->>+Parse: parse_pdf(bytes)
+    Parse-->>-API: text, sections dict
+
+    API->>+Extract: extract_skills(resume_text, jd_text)
+    Extract->>Extract: taxonomy lookup (O(1) trie)
+    Extract->>Extract: alias expansion
+    Extract->>Extract: fuzzy match (rapidfuzz, threshold 85)
+    Extract-->>-API: matched_skills[], missing_skills[]
+
+    API->>+Embed: embed(resume_chunks + jd_chunks)
+    Embed->>Embed: sentence-transformers/all-MiniLM-L6-v2<br/>or OpenAI / Titan (config-driven)
+    Embed-->>-API: embeddings (384-dim or 1536-dim)
+
+    API->>+Vector: similarity_search(jd_embedding, k=5)
+    note over Vector: RAG — retrieve top-k JD chunks<br/>for grounding LLM feedback
+    Vector-->>-API: context_chunks[]
+
+    API->>API: compute_scores()<br/>• semantic_score = cosine_sim(resume_emb, jd_emb) × 100<br/>• skill_score = matched / total × 100<br/>• experience_score = section heuristic<br/>• overall = 0.5×semantic + 0.3×skill + 0.2×experience
+
+    API->>+LLM: chat_completion(prompt_v2, context_chunks)
+    note over LLM: Prompt includes: resume text, JD,<br/>scores, RAG context, scoring rubric
+    LLM-->>-API: LLMFeedback (JSON)<br/>summary, strengths, gaps,<br/>ats_warnings, recommended_keywords
+
+    API->>Metrics: ANALYSIS_DURATION.observe(elapsed)<br/>LLM_TOKENS.inc(prompt_tokens, kind="prompt")<br/>LLM_TOKENS.inc(completion_tokens, kind="completion")
+
+    API->>DB: UPDATE analysis SET status=completed,<br/>scores, skills, llm_feedback, tokens_used
+    DB-->>API: ok
+    API-->>-FE: 201 AnalysisResponse (JSON)
+    FE-->>-User: Display score dashboard<br/>Matched/missing skills<br/>LLM feedback + suggestions
+
+    note over API,Metrics: On failure:<br/>analysis_failures_total.inc(reason=...)<br/>record.status = "failed"

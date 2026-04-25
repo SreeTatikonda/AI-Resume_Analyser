@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # create GitHub Release
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for changelog
+
+      # ── Generate changelog from commits since last tag ─────────────────────
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+
+          echo "## What's Changed" > /tmp/changelog.md
+          echo "" >> /tmp/changelog.md
+
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            echo "### Commits since ${PREVIOUS_TAG}" >> /tmp/changelog.md
+            git log --pretty=format:"- %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" \
+              "${PREVIOUS_TAG}..HEAD" >> /tmp/changelog.md
+          else
+            echo "### Initial Release" >> /tmp/changelog.md
+            git log --pretty=format:"- %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" \
+              >> /tmp/changelog.md
+          fi
+
+          echo "" >> /tmp/changelog.md
+          echo "---" >> /tmp/changelog.md
+          echo "" >> /tmp/changelog.md
+          echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${CURRENT_TAG}" \
+            >> /tmp/changelog.md
+
+          # Make available in subsequent steps
+          {
+            echo 'body<<EOF'
+            cat /tmp/changelog.md
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+          echo "previous_tag=${PREVIOUS_TAG}" >> "$GITHUB_OUTPUT"
+          echo "current_tag=${CURRENT_TAG}" >> "$GITHUB_OUTPUT"
+
+      # ── Create GitHub Release ─────────────────────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.changelog.outputs.current_tag }}
+          name: "${{ steps.changelog.outputs.current_tag }}"
+          body: ${{ steps.changelog.outputs.body }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
+          generate_release_notes: false
+          make_latest: "true"
