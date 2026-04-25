@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 1: dev — live reloading for local development
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS dev
+FROM node:25-alpine AS dev
 
 WORKDIR /app
 
@@ -19,7 +19,7 @@ CMD ["npm", "run", "dev", "--", "--host"]
 # ──────────────────────────────────────────────────────────────────────────────
 # Stage 2: build — compile the production bundle
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS build
+FROM node:25-alpine AS build
 
 WORKDIR /app
 
